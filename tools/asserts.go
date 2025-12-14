@@ -29,7 +29,7 @@ func newAssertsClient(ctx context.Context) (*Client, error) {
 		}
 	}
 
-	transport = NewAuthRoundTripper(transport, cfg.AccessToken, cfg.IDToken, cfg.APIKey, cfg.BasicAuth)
+	transport = NewAuthRoundTripper(transport, cfg.AccessToken, cfg.IDToken, cfg.APIKey, cfg.BasicAuth, cfg.SessionCookie)
 	transport = mcpgrafana.NewOrgIDRoundTripper(transport, cfg.OrgID)
 
 	client := &http.Client{

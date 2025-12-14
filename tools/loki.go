@@ -64,7 +64,7 @@ func newLokiClient(ctx context.Context, uid string) (*Client, error) {
 		}
 	}
 
-	transport = NewAuthRoundTripper(transport, cfg.AccessToken, cfg.IDToken, cfg.APIKey, cfg.BasicAuth)
+	transport = NewAuthRoundTripper(transport, cfg.AccessToken, cfg.IDToken, cfg.APIKey, cfg.BasicAuth, cfg.SessionCookie)
 	transport = mcpgrafana.NewOrgIDRoundTripper(transport, cfg.OrgID)
 
 	client := &http.Client{
@@ -177,26 +177,34 @@ func (c *Client) fetchData(ctx context.Context, urlPath string, startRFC3339, en
 	return labelResponse.Data, nil
 }
 
-func NewAuthRoundTripper(rt http.RoundTripper, accessToken, idToken, apiKey string, basicAuth *url.Userinfo) *authRoundTripper {
+func NewAuthRoundTripper(rt http.RoundTripper, accessToken, idToken, apiKey string, basicAuth *url.Userinfo, sessionCookie string) *authRoundTripper {
 	return &authRoundTripper{
-		accessToken: accessToken,
-		idToken:     idToken,
-		apiKey:      apiKey,
-		basicAuth:   basicAuth,
-		underlying:  rt,
+		accessToken:   accessToken,
+		idToken:       idToken,
+		apiKey:        apiKey,
+		basicAuth:     basicAuth,
+		sessionCookie: sessionCookie,
+		underlying:    rt,
 	}
 }
 
 type authRoundTripper struct {
-	accessToken string
-	idToken     string
-	apiKey      string
-	basicAuth   *url.Userinfo
-	underlying  http.RoundTripper
+	accessToken   string
+	idToken       string
+	apiKey        string
+	basicAuth     *url.Userinfo
+	sessionCookie string
+	underlying    http.RoundTripper
 }
 
 func (rt *authRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	if rt.accessToken != "" && rt.idToken != "" {
+	if rt.sessionCookie != "" {
+		if strings.Contains(rt.sessionCookie, "=") {
+			req.Header.Set("Cookie", rt.sessionCookie)
+		} else {
+			req.Header.Set("Cookie", fmt.Sprintf("grafana_session=%s", rt.sessionCookie))
+		}
+	} else if rt.accessToken != "" && rt.idToken != "" {
 		req.Header.Set("X-Access-Token", rt.accessToken)
 		req.Header.Set("X-Grafana-Id", rt.idToken)
 	} else if rt.apiKey != "" {

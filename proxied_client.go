@@ -29,7 +29,10 @@ func NewProxiedClient(ctx context.Context, datasourceUID, datasourceName, dataso
 
 	// Build headers for authentication
 	headers := make(map[string]string)
-	if config.APIKey != "" {
+
+	if cookie := resolveSessionCookie(config.SessionCookie, config.SessionCookieFile); cookie != "" {
+		headers["Cookie"] = formatCookieHeader(cookie)
+	} else if config.APIKey != "" {
 		headers["Authorization"] = "Bearer " + config.APIKey
 	} else if config.BasicAuth != nil {
 		auth := config.BasicAuth.String()

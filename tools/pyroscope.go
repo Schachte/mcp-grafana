@@ -287,7 +287,7 @@ func fetchPyroscopeProfile(ctx context.Context, args FetchPyroscopeProfileParams
 func newPyroscopeClient(ctx context.Context, uid string) (*pyroscopeClient, error) {
 	cfg := mcpgrafana.GrafanaConfigFromContext(ctx)
 
-	var transport http.RoundTripper = NewAuthRoundTripper(http.DefaultTransport, cfg.AccessToken, cfg.IDToken, cfg.APIKey, cfg.BasicAuth)
+	var transport http.RoundTripper = NewAuthRoundTripper(http.DefaultTransport, cfg.AccessToken, cfg.IDToken, cfg.APIKey, cfg.BasicAuth, cfg.SessionCookie)
 	transport = mcpgrafana.NewOrgIDRoundTripper(transport, cfg.OrgID)
 
 	httpClient := &http.Client{

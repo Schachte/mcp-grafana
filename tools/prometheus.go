@@ -49,7 +49,19 @@ func promClientFromContext(ctx context.Context, uid string) (promv1.API, error) 
 		rt = customTransport
 	}
 
-	if cfg.AccessToken != "" && cfg.IDToken != "" {
+	if cfg.SessionCookie != "" {
+		cookieValue := cfg.SessionCookie
+		if !strings.Contains(cookieValue, "=") {
+			cookieValue = fmt.Sprintf("grafana_session=%s", cookieValue)
+		}
+		rt = config.NewHeadersRoundTripper(&config.Headers{
+			Headers: map[string]config.Header{
+				"Cookie": {
+					Secrets: []config.Secret{config.Secret(cookieValue)},
+				},
+			},
+		}, rt)
+	} else if cfg.AccessToken != "" && cfg.IDToken != "" {
 		rt = config.NewHeadersRoundTripper(&config.Headers{
 			Headers: map[string]config.Header{
 				"X-Access-Token": {

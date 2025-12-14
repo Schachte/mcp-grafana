@@ -13,3 +13,14 @@ wheels/
 # Virtual environments
 .venv
 .envrc
+~/.config/grafana-mcp/
+session-cookie.txt
+
+# Binaries
+mcp-grafana
+
+# Backup files
+*.bak
+
+# Test files
+cookie.txt

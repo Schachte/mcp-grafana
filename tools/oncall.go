@@ -28,7 +28,14 @@ func getOnCallURLFromSettings(ctx context.Context, cfg mcpgrafana.GrafanaConfig)
 		return "", fmt.Errorf("creating settings request: %w", err)
 	}
 
-	if cfg.APIKey != "" {
+	if mcpgrafana.SessionCookieConfigured(cfg) {
+		cookie := mcpgrafana.SessionCookieValue(cfg)
+		if strings.Contains(cookie, "=") {
+			req.Header.Set("Cookie", cookie)
+		} else {
+			req.Header.Set("Cookie", fmt.Sprintf("grafana_session=%s", cookie))
+		}
+	} else if cfg.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
 	} else if cfg.BasicAuth != nil {
 		password, _ := cfg.BasicAuth.Password()
@@ -84,14 +91,17 @@ func oncallClientFromContext(ctx context.Context) (*aapi.Client, error) {
 
 	grafanaOnCallURL = strings.TrimRight(grafanaOnCallURL, "/")
 
+	apiKey := cfg.APIKey
+	if mcpgrafana.SessionCookieConfigured(cfg) {
+		apiKey = ""
+	}
+
 	// TODO: Allow access to OnCall using an access token instead of an API key.
-	client, err := aapi.NewWithGrafanaURL(grafanaOnCallURL, cfg.APIKey, cfg.URL)
+	client, err := aapi.NewWithGrafanaURL(grafanaOnCallURL, apiKey, cfg.URL)
 	if err != nil {
 		return nil, fmt.Errorf("creating OnCall client: %w", err)
 	}
 
-	// Try to customize the HTTP client with user agent using reflection
-	// since the OnCall client doesn't expose its HTTP client directly
 	clientValue := reflect.ValueOf(client)
 	if clientValue.Kind() == reflect.Ptr && !clientValue.IsNil() {
 		clientValue = clientValue.Elem()
@@ -106,13 +116,12 @@ func oncallClientFromContext(ctx context.Context) (*aapi.Client, error) {
 			}
 			if httpClientField.IsValid() && httpClientField.CanSet() {
 				if httpClient, ok := httpClientField.Interface().(*http.Client); ok {
-					// Wrap the transport with user agent
 					if httpClient.Transport == nil {
 						httpClient.Transport = http.DefaultTransport
 					}
-					httpClient.Transport = mcpgrafana.NewUserAgentTransport(
-						httpClient.Transport,
-					)
+					sessionWrapped := mcpgrafana.NewSessionCookieRoundTripper(httpClient.Transport, cfg.SessionCookie, cfg.SessionCookieFile, cfg.URL)
+					orgIDWrapped := mcpgrafana.NewOrgIDRoundTripper(sessionWrapped, cfg.OrgID)
+					httpClient.Transport = mcpgrafana.NewUserAgentTransport(orgIDWrapped)
 				}
 			}
 		}

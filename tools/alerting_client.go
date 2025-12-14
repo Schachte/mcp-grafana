@@ -27,13 +27,14 @@ const (
 )
 
 type alertingClient struct {
-	baseURL     *url.URL
-	accessToken string
-	idToken     string
-	apiKey      string
-	basicAuth   *url.Userinfo
-	orgID       int64
-	httpClient  *http.Client
+	baseURL       *url.URL
+	accessToken   string
+	idToken       string
+	apiKey        string
+	basicAuth     *url.Userinfo
+	orgID         int64
+	sessionCookie string
+	httpClient    *http.Client
 }
 
 func newAlertingClientFromContext(ctx context.Context) (*alertingClient, error) {
@@ -45,12 +46,13 @@ func newAlertingClientFromContext(ctx context.Context) (*alertingClient, error) 
 	}
 
 	client := &alertingClient{
-		baseURL:     parsedBaseURL,
-		accessToken: cfg.AccessToken,
-		idToken:     cfg.IDToken,
-		apiKey:      cfg.APIKey,
-		basicAuth:   cfg.BasicAuth,
-		orgID:       cfg.OrgID,
+		baseURL:       parsedBaseURL,
+		accessToken:   cfg.AccessToken,
+		idToken:       cfg.IDToken,
+		apiKey:        cfg.APIKey,
+		basicAuth:     cfg.BasicAuth,
+		orgID:         cfg.OrgID,
+		sessionCookie: cfg.SessionCookie,
 		httpClient: &http.Client{
 			Timeout: defaultTimeout,
 		},
@@ -87,8 +89,13 @@ func (c *alertingClient) makeRequest(ctx context.Context, path string) (*http.Re
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
 
-	// If accessToken is set we use that first and fall back to normal Authorization.
-	if c.accessToken != "" && c.idToken != "" {
+	if c.sessionCookie != "" {
+		if strings.Contains(c.sessionCookie, "=") {
+			req.Header.Set("Cookie", c.sessionCookie)
+		} else {
+			req.Header.Set("Cookie", fmt.Sprintf("grafana_session=%s", c.sessionCookie))
+		}
+	} else if c.accessToken != "" && c.idToken != "" {
 		req.Header.Set("X-Access-Token", c.accessToken)
 		req.Header.Set("X-Grafana-Id", c.idToken)
 	} else if c.apiKey != "" {
