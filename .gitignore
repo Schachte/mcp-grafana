@@ -24,3 +24,4 @@ mcp-grafana
 
 # Test files
 cookie.txt
+.cache

@@ -18,6 +18,7 @@ import (
 	"reflect"
 	"runtime"
 	"runtime/debug"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -99,20 +100,6 @@ func orgIdFromEnv() int64 {
 }
 
 func sessionCookieFromEnv() string {
-	cookieFile := os.Getenv(grafanaSessionCookieFileEnv)
-	if cookieFile != "" {
-		data, err := os.ReadFile(cookieFile)
-		if err != nil {
-			slog.Warn("Failed to read session cookie from file, falling back to env var", "file", cookieFile, "error", err)
-		} else {
-			cookie := strings.TrimSpace(string(data))
-			if cookie != "" {
-				slog.Debug("Read session cookie from file", "file", cookieFile)
-				return cookie
-			}
-		}
-	}
-
 	cookie := os.Getenv(grafanaSessionCookieEnvVar)
 	if cookie != "" {
 		slog.Debug("Read session cookie from env")
@@ -131,7 +118,6 @@ func resolveSessionCookie(cookie, cookieFile string) string {
 
 	data, err := os.ReadFile(cookieFile)
 	if err != nil {
-		slog.Debug("Failed to read session cookie from file, using fallback cookie", "file", cookieFile, "error", err)
 		return cookie
 	}
 
@@ -378,6 +364,15 @@ func wrapWithSessionCookie(rt http.RoundTripper, cookie, cookieFile, grafanaURL 
 	return NewSessionCookieRoundTripper(rt, cookie, cookieFile, grafanaURL)
 }
 
+func isHTMLResponse(resp *http.Response) bool {
+	if resp == nil {
+		return false
+	}
+
+	ct := strings.ToLower(resp.Header.Get("Content-Type"))
+	return strings.Contains(ct, "text/html")
+}
+
 func ensureJSONConsumers(rt *httptransport.Runtime) {
 	if rt == nil {
 		return
@@ -464,6 +459,21 @@ func (t *SessionCookieRoundTripper) RoundTrip(req *http.Request) (*http.Response
 	}
 
 	resp, err := attempt()
+	if err == nil && resp != nil && isHTMLResponse(resp) && t.sessionCookieFile != "" {
+		// Some auth gateways (e.g., Cloudflare Access) return HTML login pages with 200,
+		// so treat HTML as an auth failure and try to refresh the cookie once.
+		_ = resp.Body.Close()
+		if err := t.triggerAutoLogin(req.Context(), true, loginCheckURL); err != nil {
+			return nil, fmt.Errorf("auto-login after HTML response failed: %w", err)
+		}
+		resp, err = attempt()
+	}
+
+	if resp != nil && err == nil && isHTMLResponse(resp) {
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("Grafana returned HTML (%s, %s) for %s – session cookie is likely invalid or blocked by an access gateway", resp.Status, resp.Header.Get("Content-Type"), req.URL)
+	}
+
 	if resp == nil || err != nil || (resp.StatusCode != http.StatusUnauthorized && resp.StatusCode != http.StatusForbidden) || t.sessionCookieFile == "" {
 		return resp, err
 	}
@@ -548,6 +558,24 @@ func (t *SessionCookieRoundTripper) triggerAutoLogin(ctx context.Context, force 
 	return nil
 }
 
+// withCloudflareAccessToken injects a fresh CF_Authorization token from cloudflared if available.
+func (t *SessionCookieRoundTripper) withCloudflareAccessToken(cookieHeader string) string {
+	if strings.TrimSpace(cookieHeader) == "" || t.grafanaURL == "" {
+		return cookieHeader
+	}
+
+	token, err := loadCloudflareAccessToken(t.grafanaURL)
+	if err != nil {
+		slog.Debug("cloudflared access token not refreshed", "error", err)
+		return cookieHeader
+	}
+
+	slog.Debug("Refreshed Cloudflare Access token via cloudflared")
+	return mergeCookieHeader(cookieHeader, map[string]string{
+		"CF_Authorization": token,
+	})
+}
+
 func (t *SessionCookieRoundTripper) runBrowserLogin(ctx context.Context, loginURL string) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -558,6 +586,8 @@ func (t *SessionCookieRoundTripper) runBrowserLogin(ctx context.Context, loginUR
 		if cookieHeader == "" {
 			return false, nil
 		}
+
+		cookieHeader = t.withCloudflareAccessToken(cookieHeader)
 
 		valid, err := t.validateCookie(ctx, loginURL, cookieHeader)
 		if err != nil {
@@ -756,6 +786,74 @@ func loadCookieWithGetCookie(grafanaURL string) (string, error) {
 		parts = append(parts, fmt.Sprintf("%s=%s", c.Name, c.Value))
 	}
 	return strings.Join(parts, "; "), nil
+}
+
+// mergeCookieHeader merges/overwrites cookie names with provided values and emits a deterministic header.
+func mergeCookieHeader(cookieHeader string, updates map[string]string) string {
+	cookies := map[string]string{}
+
+	parts := strings.Split(cookieHeader, ";")
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if idx := strings.Index(p, "="); idx > 0 {
+			name := strings.TrimSpace(p[:idx])
+			val := strings.TrimSpace(p[idx+1:])
+			if name != "" {
+				cookies[name] = val
+			}
+		}
+	}
+
+	for k, v := range updates {
+		if strings.TrimSpace(v) == "" {
+			continue
+		}
+		cookies[k] = v
+	}
+
+	names := make([]string, 0, len(cookies))
+	for k := range cookies {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+
+	result := make([]string, 0, len(names))
+	for _, n := range names {
+		result = append(result, fmt.Sprintf("%s=%s", n, cookies[n]))
+	}
+	return strings.Join(result, "; ")
+}
+
+// loadCloudflareAccessToken attempts to fetch a fresh Access JWT via `cloudflared access token --app <url>`.
+func loadCloudflareAccessToken(grafanaURL string) (string, error) {
+	u, err := url.Parse(grafanaURL)
+	if err != nil {
+		return "", fmt.Errorf("parse grafana url: %w", err)
+	}
+	if u.Scheme == "" {
+		u.Scheme = "https"
+	}
+	if u.Hostname() == "" {
+		return "", fmt.Errorf("grafana url missing hostname")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "cloudflared", "access", "token", "--app", u.String())
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("cloudflared access token: %w", err)
+	}
+
+	token := strings.TrimSpace(string(output))
+	if token == "" {
+		return "", fmt.Errorf("cloudflared returned empty token")
+	}
+	return token, nil
 }
 
 func openDefaultBrowser(targetURL string) error {

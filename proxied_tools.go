@@ -122,7 +122,9 @@ func discoverMCPDatasources(ctx context.Context) ([]DiscoveredDatasource, error)
 			}
 
 			// Add authentication headers from the Grafana config
-			if config.APIKey != "" {
+			if cookie := resolveSessionCookie(config.SessionCookie, config.SessionCookieFile); cookie != "" {
+				req.Header.Set("Cookie", formatCookieHeader(cookie))
+			} else if config.APIKey != "" {
 				req.Header.Set("Authorization", "Bearer "+config.APIKey)
 			} else if config.BasicAuth != nil {
 				password, _ := config.BasicAuth.Password()

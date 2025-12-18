@@ -7,36 +7,55 @@ Minimal fork that authenticates using your existing Grafana browser session inst
 ## Prerequisites
 
 ```bash
-# Enables automatic cookie extraction from Chrome
-npm install -g @mherod/get-cookie
+npm install -g @mherod/get-cookie   # Cookie extraction from Chrome
+brew install cloudflared             # For Cloudflare Access tokens (if applicable)
 ```
 
 ## Build
 
 ```bash
-go mod tidy
 go build ./cmd/mcp-grafana
 ```
 
-## Run
+## Quick Start
 
 ```bash
-# Create config directory
-mkdir -p ~/.config/grafana-mcp
+# 1. Refresh cookies (extracts from browser + gets fresh CF token)
+GRAFANA_DOMAIN=grafana.example.com ./refresh_grafana_cookie.sh /tmp/grafana_cookie.txt
 
-# Set environment variables
-export GRAFANA_URL="https://grafana.yourdomain.com"
-export GRAFANA_SESSION_COOKIE_FILE="$HOME/.config/grafana-mcp/session-cookie.txt"
-
-# Start the server
+# 2. Run the server
+GRAFANA_URL=https://grafana.example.com \
+GRAFANA_SESSION_COOKIE_FILE=/tmp/grafana_cookie.txt \
 ./mcp-grafana \
   -transport streamable-http \
-  -disable-proxied \
-  -address 127.0.0.1:3010 \
+  -address 127.0.0.1:5250 \
+  -endpoint-path /mcp \
   -log-level debug
+```
 
-# Verify the cookie works (optional)
-curl -H "Cookie: $(cat "$GRAFANA_SESSION_COOKIE_FILE")" "$GRAFANA_URL/api/user"
+## Verify with MCP Inspector
+
+```bash
+# Install MCP inspector
+npx @anthropic-ai/mcp-inspector
+
+# Connect to the running server
+# URL: http://127.0.0.1:5250/mcp
+# Transport: Streamable HTTP
+```
+
+Or test manually:
+
+```bash
+# Initialize
+curl -X POST http://127.0.0.1:5250/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}},"id":1}'
+
+# List tools
+curl -X POST http://127.0.0.1:5250/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"tools/list","params":{},"id":2}'
 ```
 
 ## How authentication works
